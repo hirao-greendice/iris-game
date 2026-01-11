@@ -1,0 +1,8 @@
+body {
+  display: flex;
+  place-items: center;
+}
+#app {
+  padding: 2rem;
+  text-align: center;
+}
