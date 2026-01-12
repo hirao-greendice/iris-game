@@ -38,15 +38,19 @@ const AREA_GRID: Record<AreaId, { col: number; row: number }> = {
   F: { col: 1, row: 2 },
 };
 
+const AREA_IDS: AreaId[] = ["A", "B", "C", "D", "E", "F"];
 const STAGE_COLS = 2;
 const STAGE_ROWS = 3;
 const WORLD_RADIUS = 2;
 const WORLD_SIZE = WORLD_RADIUS * 2 + 1;
+const WALL_EDGE_EPSILON = 1e-6;
 
 export class AreaScene extends Phaser.Scene {
   private world!: WorldModel;
   private currentGraphics!: Phaser.GameObjects.Graphics;
   private nextGraphics!: Phaser.GameObjects.Graphics;
+  private renderMaskGraphics!: Phaser.GameObjects.Graphics;
+  private renderMask!: Phaser.Display.Masks.GeometryMask;
   private debugText!: Phaser.GameObjects.Text;
   private touchControls!: TouchControls;
   private zoomControls!: ZoomControls;
@@ -63,6 +67,7 @@ export class AreaScene extends Phaser.Scene {
   private stagePixels = { width: 0, height: 0 };
   private worldPixels = { width: 0, height: 0 };
   private viewOffset = { x: 0, y: 0 };
+  private renderArea = { x: 0, y: 0, size: 0 };
 
   private prevJumpDown = false;
   private transition: { plan: TransitionPlan; startTime: number; duration: number } | null = null;
@@ -76,6 +81,10 @@ export class AreaScene extends Phaser.Scene {
 
     this.currentGraphics = this.add.graphics();
     this.nextGraphics = this.add.graphics().setVisible(false);
+    this.renderMaskGraphics = this.add.graphics().setVisible(false);
+    this.renderMask = this.renderMaskGraphics.createGeometryMask();
+    this.currentGraphics.setMask(this.renderMask);
+    this.nextGraphics.setMask(this.renderMask);
 
     this.debugText = this.add
       .text(12, 12, "", {
@@ -223,7 +232,7 @@ export class AreaScene extends Phaser.Scene {
   ): void {
     if (this.zoomLevel === 0) {
       const area = stage.getArea(areaId);
-      this.drawArea(graphics, stage.id, area, drawPlayer, offsetX, offsetY);
+      this.drawArea(graphics, stage.id, areaId, area, drawPlayer, offsetX, offsetY);
       return;
     }
 
@@ -238,6 +247,7 @@ export class AreaScene extends Phaser.Scene {
   private drawArea(
     graphics: Phaser.GameObjects.Graphics,
     stageId: StageId,
+    areaId: AreaId,
     area: { walkers: { x: number; y: number }[] },
     drawPlayer: boolean,
     offsetX: number,
@@ -256,8 +266,10 @@ export class AreaScene extends Phaser.Scene {
     graphics.lineStyle(2, palette.ceiling, 1);
     graphics.strokeRect(0, 0, size, size);
 
-    graphics.fillStyle(palette.wall, 1);
+    const edgeWallColor = this.brightenColor(palette.wall, 0.45);
     for (const wall of AREA_WALLS) {
+      const wallColor = this.isStageEdgeWall(areaId, wall) ? edgeWallColor : palette.wall;
+      graphics.fillStyle(wallColor, 1);
       graphics.fillRect(wall.x * scale, wall.y * scale, wall.w * scale, wall.h * scale);
     }
 
@@ -306,6 +318,9 @@ export class AreaScene extends Phaser.Scene {
     graphics.lineBetween(areaSize, 0, areaSize, stageHeight);
     graphics.lineBetween(0, areaSize, stageWidth, areaSize);
     graphics.lineBetween(0, areaSize * 2, stageWidth, areaSize * 2);
+
+    const edgeColor = this.brightenColor(palette.wall, 0.45);
+    this.drawStageEdgeHighlights(graphics, 0, 0, areaSize, AREA_IDS, edgeColor);
 
     const areaPos = AREA_GRID[areaId];
     graphics.lineStyle(2, 0xf5d76e, 1);
@@ -369,6 +384,9 @@ export class AreaScene extends Phaser.Scene {
         graphics.lineBetween(originX + areaSize, originY, originX + areaSize, originY + stageHeight);
         graphics.lineBetween(originX, originY + areaSize, originX + stageWidth, originY + areaSize);
         graphics.lineBetween(originX, originY + areaSize * 2, originX + stageWidth, originY + areaSize * 2);
+
+        const edgeColor = this.brightenColor(palette.wall, 0.45);
+        this.drawStageEdgeHighlights(graphics, originX, originY, areaSize, AREA_IDS, edgeColor);
       }
     }
 
@@ -418,6 +436,14 @@ export class AreaScene extends Phaser.Scene {
   }
 
   private handleResize(width: number, height: number): void {
+    const renderSize = Math.min(width, height) * 0.9;
+    this.renderArea = {
+      size: renderSize,
+      x: (width - renderSize) / 2,
+      y: (height - renderSize) / 2,
+    };
+    this.updateRenderMask();
+
     const stageWidthUnits = AREA_SIZE * STAGE_COLS;
     const stageHeightUnits = AREA_SIZE * STAGE_ROWS;
     const worldWidthUnits = stageWidthUnits * WORLD_SIZE;
@@ -434,7 +460,7 @@ export class AreaScene extends Phaser.Scene {
       targetHeightUnits = worldHeightUnits;
     }
 
-    this.viewScale = Math.min(width / targetWidthUnits, height / targetHeightUnits);
+    this.viewScale = Math.min(renderSize / targetWidthUnits, renderSize / targetHeightUnits);
     this.areaPixels = AREA_SIZE * this.viewScale;
     this.stagePixels = { width: this.areaPixels * STAGE_COLS, height: this.areaPixels * STAGE_ROWS };
     this.worldPixels = {
@@ -455,8 +481,8 @@ export class AreaScene extends Phaser.Scene {
           ? this.stagePixels.height
           : this.worldPixels.height;
 
-    this.viewOffset.x = (width - targetWidth) / 2;
-    this.viewOffset.y = (height - targetHeight) / 2;
+    this.viewOffset.x = this.renderArea.x + (renderSize - targetWidth) / 2;
+    this.viewOffset.y = this.renderArea.y + (renderSize - targetHeight) / 2;
 
     this.touchControls.layout(width, height);
     this.zoomControls.layout(width, height);
@@ -534,6 +560,74 @@ export class AreaScene extends Phaser.Scene {
 
   private updateZoomControls(): void {
     this.zoomControls.setState(this.zoomLevel);
+  }
+
+  private updateRenderMask(): void {
+    this.renderMaskGraphics.clear();
+    this.renderMaskGraphics.fillStyle(0xffffff, 1);
+    this.renderMaskGraphics.fillRect(
+      this.renderArea.x,
+      this.renderArea.y,
+      this.renderArea.size,
+      this.renderArea.size
+    );
+  }
+
+  private drawStageEdgeHighlights(
+    graphics: Phaser.GameObjects.Graphics,
+    originX: number,
+    originY: number,
+    areaSize: number,
+    areaIds: AreaId[],
+    color: number
+  ): void {
+    graphics.lineStyle(3, color, 0.95);
+    for (const areaId of areaIds) {
+      const areaPos = AREA_GRID[areaId];
+      const x0 = originX + areaPos.col * areaSize;
+      const y0 = originY + areaPos.row * areaSize;
+      const x1 = x0 + areaSize;
+      const y1 = y0 + areaSize;
+
+      if (areaPos.row === 0) {
+        graphics.lineBetween(x0, y0, x1, y0);
+      }
+      if (areaPos.row === STAGE_ROWS - 1) {
+        graphics.lineBetween(x0, y1, x1, y1);
+      }
+      if (areaPos.col === 0) {
+        graphics.lineBetween(x0, y0, x0, y1);
+      }
+      if (areaPos.col === STAGE_COLS - 1) {
+        graphics.lineBetween(x1, y0, x1, y1);
+      }
+    }
+  }
+
+  private isStageEdgeWall(areaId: AreaId, wall: { x: number; y: number; w: number; h: number }): boolean {
+    const areaPos = AREA_GRID[areaId];
+    const topEdge = areaPos.row === 0;
+    const bottomEdge = areaPos.row === STAGE_ROWS - 1;
+    const leftEdge = areaPos.col === 0;
+    const rightEdge = areaPos.col === STAGE_COLS - 1;
+
+    const isHorizontal = wall.w >= wall.h;
+    const isTop = isHorizontal && wall.y <= WALL_EDGE_EPSILON;
+    const isBottom = isHorizontal && Math.abs(wall.y + wall.h - AREA_SIZE) <= WALL_EDGE_EPSILON;
+    const isLeft = !isHorizontal && wall.x <= WALL_EDGE_EPSILON;
+    const isRight = !isHorizontal && Math.abs(wall.x + wall.w - AREA_SIZE) <= WALL_EDGE_EPSILON;
+
+    return (topEdge && isTop) || (bottomEdge && isBottom) || (leftEdge && isLeft) || (rightEdge && isRight);
+  }
+
+  private brightenColor(color: number, amount: number): number {
+    const r = (color >> 16) & 0xff;
+    const g = (color >> 8) & 0xff;
+    const b = color & 0xff;
+    const nr = Math.min(255, Math.round(r + (255 - r) * amount));
+    const ng = Math.min(255, Math.round(g + (255 - g) * amount));
+    const nb = Math.min(255, Math.round(b + (255 - b) * amount));
+    return (nr << 16) | (ng << 8) | nb;
   }
 
   private stagePalette(stageId: StageId): { floor: number; wall: number; ceiling: number } {
