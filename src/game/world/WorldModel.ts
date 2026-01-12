@@ -3,6 +3,7 @@ import {
   GRAVITY,
   JUMP_SPEED,
   MAX_DT,
+  MAX_VERTICAL_SPEED,
   MOVE_SPEED,
   PLAYER_HALF,
   PLAYER_SIZE,
@@ -151,6 +152,7 @@ export class WorldModel {
     }
 
     this.player.vy += GRAVITY * dt;
+    this.player.vy = Math.max(-MAX_VERTICAL_SPEED, Math.min(MAX_VERTICAL_SPEED, this.player.vy));
 
     this.player.x += this.player.vx * dt;
     this.resolveHorizontalCollisions();

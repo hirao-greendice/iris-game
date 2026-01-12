@@ -12,7 +12,10 @@ export class Stage {
     this.id = id;
     const rng = createRng(seed);
     this.areas = Object.fromEntries(
-      AREA_IDS.map((areaId) => [areaId, new Area(areaId, createWalkers(rng), AREA_LAYOUTS[id][areaId].blocks)])
+      AREA_IDS.map((areaId) => {
+        const layout = AREA_LAYOUTS[id][areaId];
+        return [areaId, new Area(areaId, createWalkers(rng), layout.blocks, layout.doors)];
+      })
     ) as Record<AreaId, Area>;
   }
 

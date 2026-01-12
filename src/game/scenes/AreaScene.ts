@@ -2,32 +2,17 @@ import Phaser from "phaser";
 import {
   AREA_SIZE,
   PLAYER_SIZE,
-  TRANSITION_DURATION,
   WALKER_SIZE,
 } from "../config";
 import { maskToSegments } from "../segments";
 import { TouchControls } from "../ui/TouchControls";
 import { ZoomControls } from "../ui/ZoomControls";
-import { AREA_WALLS } from "../world/Area";
+import { AREA_LAYOUTS, STAGE_PALETTES, type Palette } from "../world/AreaLayouts";
 import type { Stage } from "../world/Stage";
 import { WorldModel } from "../world/WorldModel";
 import type { AreaId, InputState, Rect, StageCoord, StageId, TransitionPlan } from "../world/types";
 
 type ZoomLevel = 0 | 1 | 2;
-
-const STAGE_PALETTES: Record<StageId, { floor: number; wall: number; ceiling: number }> = {
-  "0": { floor: 0x112233, wall: 0x1c3a5a, ceiling: 0x355b78 },
-  "1": { floor: 0x14251d, wall: 0x23503a, ceiling: 0x3f6b55 },
-  "2": { floor: 0x2b1d18, wall: 0x4f2d22, ceiling: 0x6b4a38 },
-  "3": { floor: 0x241a2b, wall: 0x3f2752, ceiling: 0x5f4a74 },
-  "4": { floor: 0x1c2228, wall: 0x2d3b47, ceiling: 0x4a5a6b },
-  "5": { floor: 0x2b1818, wall: 0x4f2020, ceiling: 0x6b3636 },
-  "6": { floor: 0x21261a, wall: 0x3a4f1f, ceiling: 0x5a6b3a },
-  "7": { floor: 0x191f2e, wall: 0x273458, ceiling: 0x41507a },
-  "8": { floor: 0x182629, wall: 0x205055, ceiling: 0x3a7378 },
-  "9": { floor: 0x2b2416, wall: 0x4f3d1f, ceiling: 0x6b5833 },
-  X: { floor: 0x1b1b24, wall: 0x2f2f44, ceiling: 0x4f4f6b },
-};
 
 const AREA_GRID: Record<AreaId, { col: number; row: number }> = {
   A: { col: 0, row: 0 },
@@ -127,7 +112,7 @@ export class AreaScene extends Phaser.Scene {
       const input = this.readInput();
       const plan = this.world.step(dt, input);
       if (plan) {
-        this.startTransition(plan, time);
+        this.startTransition();
       }
     }
 
@@ -156,18 +141,8 @@ export class AreaScene extends Phaser.Scene {
     return { left, right, jumpPressed };
   }
 
-  private startTransition(plan: TransitionPlan, time: number): void {
-    if (!plan.stageChanged) {
-      this.world.commitTransition();
-      return;
-    }
-    this.transition = {
-      plan,
-      startTime: time,
-      duration: TRANSITION_DURATION * 1000,
-    };
-    this.world.pause();
-    this.nextGraphics.setVisible(true);
+  private startTransition(): void {
+    this.world.commitTransition();
   }
 
   private updateTransition(time: number): void {
@@ -202,16 +177,7 @@ export class AreaScene extends Phaser.Scene {
       );
       const offsets = this.getSlideOffsets(this.transition.plan, progress);
       const currentBaseOffset = this.zoomLevel === 0 ? { ...this.cameraOffset } : undefined;
-      const shiftedPlayer =
-        this.zoomLevel === 0 ? this.getShiftedPlayerPosition(this.transition.plan) : null;
-      const nextBaseOffset =
-        this.zoomLevel === 0
-          ? this.getStageCameraTarget(
-              this.transition.plan.toArea,
-              shiftedPlayer!.x,
-              shiftedPlayer!.y
-            )
-          : undefined;
+      const nextBaseOffset = currentBaseOffset;
 
       this.drawView(
         this.currentGraphics,
@@ -256,7 +222,7 @@ export class AreaScene extends Phaser.Scene {
     baseOffset?: { x: number; y: number }
   ): void {
     if (this.zoomLevel === 0) {
-      this.drawStageFollow(graphics, stage, stage.id, areaId, drawPlayer, offsetX, offsetY, baseOffset);
+      this.drawStageFollow(graphics, areaId, drawPlayer, offsetX, offsetY, baseOffset);
       return;
     }
 
@@ -270,8 +236,6 @@ export class AreaScene extends Phaser.Scene {
 
   private drawStageFollow(
     graphics: Phaser.GameObjects.Graphics,
-    stage: Stage,
-    stageId: StageId,
     areaId: AreaId,
     drawPlayer: boolean,
     offsetX: number,
@@ -280,74 +244,119 @@ export class AreaScene extends Phaser.Scene {
   ): void {
     graphics.clear();
     const cameraBase = baseOffset ?? this.cameraOffset;
-    graphics.setPosition(cameraBase.x + offsetX, cameraBase.y + offsetY);
+    const baseX = cameraBase.x + offsetX;
+    const baseY = cameraBase.y + offsetY;
+    graphics.setPosition(baseX, baseY);
 
-    const palette = this.stagePalette(stageId);
     const stageWidth = this.stagePixels.width;
     const stageHeight = this.stagePixels.height;
     const areaSize = this.areaPixels;
     const scale = this.viewScale;
 
-    graphics.fillStyle(palette.floor, 1);
-    graphics.fillRect(0, 0, stageWidth, stageHeight);
+    const viewLeft = this.renderArea.x - baseX;
+    const viewTop = this.renderArea.y - baseY;
+    const viewRight = viewLeft + this.renderArea.size;
+    const viewBottom = viewTop + this.renderArea.size;
 
-    graphics.lineStyle(2, palette.ceiling, 0.9);
-    graphics.strokeRect(0, 0, stageWidth, stageHeight);
+    const minStageX = Math.floor(viewLeft / stageWidth);
+    const maxStageX = Math.floor((viewRight - 1) / stageWidth);
+    const minStageY = Math.floor(viewTop / stageHeight);
+    const maxStageY = Math.floor((viewBottom - 1) / stageHeight);
 
-    graphics.lineStyle(1, palette.ceiling, 0.2);
-    graphics.lineBetween(areaSize, 0, areaSize, stageHeight);
-    graphics.lineBetween(0, areaSize, stageWidth, areaSize);
-    graphics.lineBetween(0, areaSize * 2, stageWidth, areaSize * 2);
+    const predictedStageId = this.world.getPredictedStageId();
 
-    const edgeWallColor = this.brightenColor(palette.wall, 0.45);
-    for (const id of AREA_IDS) {
-      const areaPos = AREA_GRID[id];
-      const baseX = areaPos.col * areaSize;
-      const baseY = areaPos.row * areaSize;
-      for (const wall of AREA_WALLS) {
-        const wallColor = this.isStageEdgeWall(id, wall) ? edgeWallColor : palette.wall;
-        graphics.fillStyle(wallColor, 1);
-        graphics.fillRect(
-          baseX + wall.x * scale,
-          baseY + wall.y * scale,
-          wall.w * scale,
-          wall.h * scale
-        );
-      }
+    for (let sy = minStageY; sy <= maxStageY; sy += 1) {
+      for (let sx = minStageX; sx <= maxStageX; sx += 1) {
+        const coord = { sx, sy };
+        const stage = this.world.getStageAt(coord);
+        const stageId = stage ? stage.id : predictedStageId;
+        const originX = sx * stageWidth;
+        const originY = sy * stageHeight;
+        const stagePalette = this.stagePalette(stageId);
 
-      const area = stage.getArea(id);
-      if (area.blocks.length > 0) {
-        graphics.fillStyle(palette.wall, 1);
-        for (const block of area.blocks) {
-          graphics.fillRect(
-            baseX + block.x * scale,
-            baseY + block.y * scale,
-            block.w * scale,
-            block.h * scale
-          );
+        graphics.fillStyle(stagePalette.floor, stage ? 1 : 0.35);
+        graphics.fillRect(originX, originY, stageWidth, stageHeight);
+
+        if (stage) {
+          for (const id of AREA_IDS) {
+            const areaPos = AREA_GRID[id];
+            const areaOriginX = originX + areaPos.col * areaSize;
+            const areaOriginY = originY + areaPos.row * areaSize;
+            const areaPalette = this.areaPalette(stageId, id);
+            graphics.fillStyle(areaPalette.floor, 1);
+            graphics.fillRect(areaOriginX, areaOriginY, areaSize, areaSize);
+          }
         }
-      }
 
-      graphics.fillStyle(0xf1c40f, 1);
-      for (const walker of area.walkers) {
-        const half = (WALKER_SIZE / 2) * scale;
-        graphics.fillRect(
-          baseX + walker.x * scale - half,
-          baseY + walker.y * scale - half,
-          WALKER_SIZE * scale,
-          WALKER_SIZE * scale
-        );
+        graphics.lineStyle(2, stagePalette.ceiling, stage ? 0.9 : 0.3);
+        graphics.strokeRect(originX, originY, stageWidth, stageHeight);
+
+        graphics.lineStyle(1, stagePalette.ceiling, stage ? 0.2 : 0.15);
+        graphics.lineBetween(originX + areaSize, originY, originX + areaSize, originY + stageHeight);
+        graphics.lineBetween(originX, originY + areaSize, originX + stageWidth, originY + areaSize);
+        graphics.lineBetween(originX, originY + areaSize * 2, originX + stageWidth, originY + areaSize * 2);
+
+        if (!stage) {
+          continue;
+        }
+
+        for (const id of AREA_IDS) {
+          const areaPos = AREA_GRID[id];
+          const areaOriginX = originX + areaPos.col * areaSize;
+          const areaOriginY = originY + areaPos.row * areaSize;
+          const areaPalette = this.areaPalette(stageId, id);
+          const edgeWallColor = this.brightenColor(areaPalette.wall, 0.45);
+
+          graphics.lineStyle(1, areaPalette.ceiling, 0.25);
+          graphics.strokeRect(areaOriginX, areaOriginY, areaSize, areaSize);
+          const area = stage.getArea(id);
+          for (const wall of area.boundaryWalls) {
+            const wallColor = this.isStageEdgeWall(id, wall) ? edgeWallColor : areaPalette.wall;
+            graphics.fillStyle(wallColor, 1);
+            graphics.fillRect(
+              areaOriginX + wall.x * scale,
+              areaOriginY + wall.y * scale,
+              wall.w * scale,
+              wall.h * scale
+            );
+          }
+
+          if (area.blocks.length > 0) {
+            graphics.fillStyle(areaPalette.wall, 1);
+            for (const block of area.blocks) {
+              graphics.fillRect(
+                areaOriginX + block.x * scale,
+                areaOriginY + block.y * scale,
+                block.w * scale,
+                block.h * scale
+              );
+            }
+          }
+
+          graphics.fillStyle(0xf1c40f, 1);
+          for (const walker of area.walkers) {
+            const half = (WALKER_SIZE / 2) * scale;
+            graphics.fillRect(
+              areaOriginX + walker.x * scale - half,
+              areaOriginY + walker.y * scale - half,
+              WALKER_SIZE * scale,
+              WALKER_SIZE * scale
+            );
+          }
+        }
       }
     }
 
     if (drawPlayer) {
-      const player = this.world.player;
-      const areaPos = AREA_GRID[areaId];
-      const px = (areaPos.col * AREA_SIZE + player.x) * scale;
-      const py = (areaPos.row * AREA_SIZE + player.y) * scale;
+      const playerPosition = this.getWorldPlayerPixels(areaId);
       const half = (PLAYER_SIZE / 2) * scale;
       graphics.fillStyle(0x66f0ff, 1);
-      graphics.fillRect(px - half, py - half, PLAYER_SIZE * scale, PLAYER_SIZE * scale);
+      graphics.fillRect(
+        playerPosition.x - half,
+        playerPosition.y - half,
+        PLAYER_SIZE * scale,
+        PLAYER_SIZE * scale
+      );
     }
   }
 
@@ -362,23 +371,29 @@ export class AreaScene extends Phaser.Scene {
     graphics.clear();
     graphics.setPosition(this.viewOffset.x + offsetX, this.viewOffset.y + offsetY);
 
-    const palette = this.stagePalette(stageId);
+    const stagePalette = this.stagePalette(stageId);
     const stageWidth = this.stagePixels.width;
     const stageHeight = this.stagePixels.height;
     const areaSize = this.areaPixels;
 
-    graphics.fillStyle(palette.floor, 1);
+    graphics.fillStyle(stagePalette.floor, 1);
     graphics.fillRect(0, 0, stageWidth, stageHeight);
 
-    graphics.lineStyle(2, palette.ceiling, 0.9);
+    for (const id of AREA_IDS) {
+      const areaPos = AREA_GRID[id];
+      const areaPalette = this.areaPalette(stageId, id);
+      const areaOriginX = areaPos.col * areaSize;
+      const areaOriginY = areaPos.row * areaSize;
+      graphics.fillStyle(areaPalette.floor, 1);
+      graphics.fillRect(areaOriginX, areaOriginY, areaSize, areaSize);
+      graphics.lineStyle(1, areaPalette.ceiling, 0.35);
+      graphics.strokeRect(areaOriginX, areaOriginY, areaSize, areaSize);
+    }
+
+    graphics.lineStyle(2, stagePalette.ceiling, 0.9);
     graphics.strokeRect(0, 0, stageWidth, stageHeight);
 
-    graphics.lineStyle(1, palette.ceiling, 0.35);
-    graphics.lineBetween(areaSize, 0, areaSize, stageHeight);
-    graphics.lineBetween(0, areaSize, stageWidth, areaSize);
-    graphics.lineBetween(0, areaSize * 2, stageWidth, areaSize * 2);
-
-    const edgeColor = this.brightenColor(palette.wall, 0.45);
+    const edgeColor = this.brightenColor(stagePalette.wall, 0.45);
     this.drawStageEdgeHighlights(graphics, 0, 0, areaSize, AREA_IDS, edgeColor);
 
     const areaPos = AREA_GRID[areaId];
@@ -432,19 +447,25 @@ export class AreaScene extends Phaser.Scene {
           continue;
         }
 
-        const palette = this.stagePalette(stage.id);
-        graphics.fillStyle(palette.floor, 0.95);
+        const stagePalette = this.stagePalette(stage.id);
+        graphics.fillStyle(stagePalette.floor, 0.95);
         graphics.fillRect(originX, originY, stageWidth, stageHeight);
 
-        graphics.lineStyle(1, palette.ceiling, 0.55);
+        for (const id of AREA_IDS) {
+          const areaPos = AREA_GRID[id];
+          const areaPalette = this.areaPalette(stage.id, id);
+          const areaOriginX = originX + areaPos.col * areaSize;
+          const areaOriginY = originY + areaPos.row * areaSize;
+          graphics.fillStyle(areaPalette.floor, 0.95);
+          graphics.fillRect(areaOriginX, areaOriginY, areaSize, areaSize);
+          graphics.lineStyle(1, areaPalette.ceiling, 0.25);
+          graphics.strokeRect(areaOriginX, areaOriginY, areaSize, areaSize);
+        }
+
+        graphics.lineStyle(1, stagePalette.ceiling, 0.55);
         graphics.strokeRect(originX, originY, stageWidth, stageHeight);
 
-        graphics.lineStyle(1, palette.ceiling, 0.25);
-        graphics.lineBetween(originX + areaSize, originY, originX + areaSize, originY + stageHeight);
-        graphics.lineBetween(originX, originY + areaSize, originX + stageWidth, originY + areaSize);
-        graphics.lineBetween(originX, originY + areaSize * 2, originX + stageWidth, originY + areaSize * 2);
-
-        const edgeColor = this.brightenColor(palette.wall, 0.45);
+        const edgeColor = this.brightenColor(stagePalette.wall, 0.45);
         this.drawStageEdgeHighlights(graphics, originX, originY, areaSize, AREA_IDS, edgeColor);
       }
     }
@@ -586,9 +607,14 @@ export class AreaScene extends Phaser.Scene {
       return 0;
     }
 
-    return plan.direction === "left" || plan.direction === "right"
-      ? this.stagePixels.width
-      : this.stagePixels.height;
+    const horizontal = plan.direction === "left" || plan.direction === "right";
+    if (this.zoomLevel === 0) {
+      return horizontal
+        ? this.stagePixels.width / STAGE_COLS
+        : this.stagePixels.height / STAGE_ROWS;
+    }
+
+    return horizontal ? this.stagePixels.width : this.stagePixels.height;
   }
 
   private registerZoomKeys(): void {
@@ -639,7 +665,7 @@ export class AreaScene extends Phaser.Scene {
 
   private updateCameraOffset(dt: number): void {
     const areaId = this.world.getCurrentAreaId();
-    const target = this.getStageCameraTarget(areaId, this.world.player.x, this.world.player.y);
+    const target = this.getWorldCameraTarget(areaId, this.world.player.x, this.world.player.y);
     if (!this.cameraInitialized) {
       this.cameraOffset = target;
       this.cameraInitialized = true;
@@ -652,69 +678,30 @@ export class AreaScene extends Phaser.Scene {
 
   private syncCameraOffset(areaId?: AreaId): void {
     const resolvedArea = areaId ?? this.world.getCurrentAreaId();
-    this.cameraOffset = this.getStageCameraTarget(resolvedArea, this.world.player.x, this.world.player.y);
+    this.cameraOffset = this.getWorldCameraTarget(resolvedArea, this.world.player.x, this.world.player.y);
     this.cameraInitialized = true;
   }
 
-  private getStageCameraTarget(areaId: AreaId, playerX: number, playerY: number): { x: number; y: number } {
-    const areaPos = AREA_GRID[areaId];
-    const px = (areaPos.col * AREA_SIZE + playerX) * this.viewScale;
-    const py = (areaPos.row * AREA_SIZE + playerY) * this.viewScale;
-    return this.getClampedCameraOffset(px, py);
-  }
-
-  private getClampedCameraOffset(targetX: number, targetY: number): { x: number; y: number } {
+  private getWorldCameraTarget(areaId: AreaId, playerX: number, playerY: number): { x: number; y: number } {
+    const playerPixels = this.getWorldPlayerPixels(areaId, playerX, playerY);
     const viewportSize = this.renderArea.size;
-    const stageWidth = this.stagePixels.width;
-    const stageHeight = this.stagePixels.height;
-
-    let offsetX = this.renderArea.x + viewportSize / 2 - targetX;
-    let offsetY = this.renderArea.y + viewportSize / 2 - targetY;
-
-    if (stageWidth <= viewportSize) {
-      offsetX = this.renderArea.x + (viewportSize - stageWidth) / 2;
-    } else {
-      offsetX = Phaser.Math.Clamp(
-        offsetX,
-        this.renderArea.x + viewportSize - stageWidth,
-        this.renderArea.x
-      );
-    }
-
-    if (stageHeight <= viewportSize) {
-      offsetY = this.renderArea.y + (viewportSize - stageHeight) / 2;
-    } else {
-      offsetY = Phaser.Math.Clamp(
-        offsetY,
-        this.renderArea.y + viewportSize - stageHeight,
-        this.renderArea.y
-      );
-    }
-
-    return { x: offsetX, y: offsetY };
+    const focusY = this.renderArea.y + viewportSize * 0.75;
+    return {
+      x: this.renderArea.x + viewportSize / 2 - playerPixels.x,
+      y: focusY - playerPixels.y,
+    };
   }
 
-  private getShiftedPlayerPosition(plan: TransitionPlan): { x: number; y: number } {
-    const player = this.world.player;
-    let x = player.x;
-    let y = player.y;
-
-    switch (plan.direction) {
-      case "left":
-        x += AREA_SIZE;
-        break;
-      case "right":
-        x -= AREA_SIZE;
-        break;
-      case "up":
-        y += AREA_SIZE;
-        break;
-      case "down":
-        y -= AREA_SIZE;
-        break;
-    }
-
-    return { x, y };
+  private getWorldPlayerPixels(areaId: AreaId, playerX?: number, playerY?: number): { x: number; y: number } {
+    const coord = this.world.getCurrentStageCoord();
+    const areaPos = AREA_GRID[areaId];
+    const stageWidthUnits = AREA_SIZE * STAGE_COLS;
+    const stageHeightUnits = AREA_SIZE * STAGE_ROWS;
+    const resolvedX = playerX ?? this.world.player.x;
+    const resolvedY = playerY ?? this.world.player.y;
+    const worldX = coord.sx * stageWidthUnits + areaPos.col * AREA_SIZE + resolvedX;
+    const worldY = coord.sy * stageHeightUnits + areaPos.row * AREA_SIZE + resolvedY;
+    return { x: worldX * this.viewScale, y: worldY * this.viewScale };
   }
 
   private drawStageEdgeHighlights(
@@ -774,7 +761,16 @@ export class AreaScene extends Phaser.Scene {
     return (nr << 16) | (ng << 8) | nb;
   }
 
-  private stagePalette(stageId: StageId): { floor: number; wall: number; ceiling: number } {
+  private areaPalette(stageId: StageId, areaId: AreaId): Palette {
+    const base = this.stagePalette(stageId);
+    const override = AREA_LAYOUTS[stageId]?.[areaId]?.palette;
+    if (!override) {
+      return base;
+    }
+    return { ...base, ...override };
+  }
+
+  private stagePalette(stageId: StageId): Palette {
     return STAGE_PALETTES[stageId];
   }
 }
