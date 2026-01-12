@@ -11,10 +11,14 @@ export const AREA_WALLS: Rect[] = buildBoundaryWalls();
 export class Area {
   readonly id: AreaId;
   readonly walkers: WalkerState[];
+  readonly blocks: Rect[];
+  readonly walls: Rect[];
 
-  constructor(id: AreaId, walkers: WalkerState[]) {
+  constructor(id: AreaId, walkers: WalkerState[], blocks: Rect[] = []) {
     this.id = id;
     this.walkers = walkers;
+    this.blocks = blocks;
+    this.walls = [...AREA_WALLS, ...blocks];
   }
 
   update(dt: number): void {

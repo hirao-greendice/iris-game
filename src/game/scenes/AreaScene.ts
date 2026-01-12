@@ -11,7 +11,7 @@ import { ZoomControls } from "../ui/ZoomControls";
 import { AREA_WALLS } from "../world/Area";
 import type { Stage } from "../world/Stage";
 import { WorldModel } from "../world/WorldModel";
-import type { AreaId, InputState, StageCoord, StageId, TransitionPlan } from "../world/types";
+import type { AreaId, InputState, Rect, StageCoord, StageId, TransitionPlan } from "../world/types";
 
 type ZoomLevel = 0 | 1 | 2;
 
@@ -248,7 +248,7 @@ export class AreaScene extends Phaser.Scene {
     graphics: Phaser.GameObjects.Graphics,
     stageId: StageId,
     areaId: AreaId,
-    area: { walkers: { x: number; y: number }[] },
+    area: { walkers: { x: number; y: number }[]; blocks: Rect[] },
     drawPlayer: boolean,
     offsetX: number,
     offsetY: number
@@ -271,6 +271,12 @@ export class AreaScene extends Phaser.Scene {
       const wallColor = this.isStageEdgeWall(areaId, wall) ? edgeWallColor : palette.wall;
       graphics.fillStyle(wallColor, 1);
       graphics.fillRect(wall.x * scale, wall.y * scale, wall.w * scale, wall.h * scale);
+    }
+    if (area.blocks.length > 0) {
+      graphics.fillStyle(palette.wall, 1);
+      for (const block of area.blocks) {
+        graphics.fillRect(block.x * scale, block.y * scale, block.w * scale, block.h * scale);
+      }
     }
 
     graphics.fillStyle(0xf1c40f, 1);
@@ -604,7 +610,7 @@ export class AreaScene extends Phaser.Scene {
     }
   }
 
-  private isStageEdgeWall(areaId: AreaId, wall: { x: number; y: number; w: number; h: number }): boolean {
+  private isStageEdgeWall(areaId: AreaId, wall: Rect): boolean {
     const areaPos = AREA_GRID[areaId];
     const topEdge = areaPos.row === 0;
     const bottomEdge = areaPos.row === STAGE_ROWS - 1;

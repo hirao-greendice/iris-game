@@ -1,9 +1,8 @@
 import { AREA_SIZE, WALKER_SPEED } from "../config";
+import { AREA_LAYOUTS, AREA_IDS } from "./AreaLayouts";
 import { Area } from "./Area";
 import { createRng } from "./random";
 import type { AreaId, StageId, WalkerState } from "./types";
-
-const AREA_IDS: AreaId[] = ["A", "B", "C", "D", "E", "F"];
 
 export class Stage {
   readonly id: StageId;
@@ -13,7 +12,7 @@ export class Stage {
     this.id = id;
     const rng = createRng(seed);
     this.areas = Object.fromEntries(
-      AREA_IDS.map((areaId) => [areaId, new Area(areaId, createWalkers(rng))])
+      AREA_IDS.map((areaId) => [areaId, new Area(areaId, createWalkers(rng), AREA_LAYOUTS[id][areaId].blocks)])
     ) as Record<AreaId, Area>;
   }
 

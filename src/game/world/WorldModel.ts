@@ -9,13 +9,13 @@ import {
 } from "../config";
 import { segmentsMaskToStageId, segmentToBit } from "../segments";
 import type { Segment } from "../segments";
-import { AREA_WALLS } from "./Area";
 import { Stage } from "./Stage";
 import type {
   AreaId,
   Direction,
   InputState,
   PlayerState,
+  Rect,
   StageCoord,
   StageId,
   TransitionPlan,
@@ -167,7 +167,7 @@ export class WorldModel {
   }
 
   private resolveHorizontalCollisions(): void {
-    for (const wall of AREA_WALLS) {
+    for (const wall of this.getCurrentWalls()) {
       if (!this.overlapsWall(wall)) {
         continue;
       }
@@ -184,7 +184,7 @@ export class WorldModel {
   private resolveVerticalCollisions(): void {
     this.player.grounded = false;
 
-    for (const wall of AREA_WALLS) {
+    for (const wall of this.getCurrentWalls()) {
       if (!this.overlapsWall(wall)) {
         continue;
       }
@@ -208,6 +208,10 @@ export class WorldModel {
       py < wall.y + wall.h &&
       py + PLAYER_SIZE > wall.y
     );
+  }
+
+  private getCurrentWalls(): Rect[] {
+    return this.currentStage.getArea(this.currentAreaId).walls;
   }
 
   private checkExitDirection(): Direction | null {
