@@ -13,5 +13,5 @@ export const ENTRY_OFFSET = 0.2;
 export const WALKER_SIZE = 0.8;
 export const WALKER_SPEED = 2.2;
 
-export const TRANSITION_DURATION = 0.65;
+export const TRANSITION_DURATION = 0.50;
 export const MAX_DT = 0.05;

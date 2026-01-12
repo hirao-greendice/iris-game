@@ -7,9 +7,41 @@ import {
 } from "../config";
 import { maskToSegments } from "../segments";
 import { TouchControls } from "../ui/TouchControls";
+import { ZoomControls } from "../ui/ZoomControls";
 import { AREA_WALLS } from "../world/Area";
+import type { Stage } from "../world/Stage";
 import { WorldModel } from "../world/WorldModel";
-import type { InputState, StageId, TransitionPlan } from "../world/types";
+import type { AreaId, InputState, StageCoord, StageId, TransitionPlan } from "../world/types";
+
+type ZoomLevel = 0 | 1 | 2;
+
+const STAGE_PALETTES: Record<StageId, { floor: number; wall: number; ceiling: number }> = {
+  "0": { floor: 0x112233, wall: 0x1c3a5a, ceiling: 0x355b78 },
+  "1": { floor: 0x14251d, wall: 0x23503a, ceiling: 0x3f6b55 },
+  "2": { floor: 0x2b1d18, wall: 0x4f2d22, ceiling: 0x6b4a38 },
+  "3": { floor: 0x241a2b, wall: 0x3f2752, ceiling: 0x5f4a74 },
+  "4": { floor: 0x1c2228, wall: 0x2d3b47, ceiling: 0x4a5a6b },
+  "5": { floor: 0x2b1818, wall: 0x4f2020, ceiling: 0x6b3636 },
+  "6": { floor: 0x21261a, wall: 0x3a4f1f, ceiling: 0x5a6b3a },
+  "7": { floor: 0x191f2e, wall: 0x273458, ceiling: 0x41507a },
+  "8": { floor: 0x182629, wall: 0x205055, ceiling: 0x3a7378 },
+  "9": { floor: 0x2b2416, wall: 0x4f3d1f, ceiling: 0x6b5833 },
+  X: { floor: 0x1b1b24, wall: 0x2f2f44, ceiling: 0x4f4f6b },
+};
+
+const AREA_GRID: Record<AreaId, { col: number; row: number }> = {
+  A: { col: 0, row: 0 },
+  B: { col: 1, row: 0 },
+  C: { col: 0, row: 1 },
+  D: { col: 1, row: 1 },
+  E: { col: 0, row: 2 },
+  F: { col: 1, row: 2 },
+};
+
+const STAGE_COLS = 2;
+const STAGE_ROWS = 3;
+const WORLD_RADIUS = 2;
+const WORLD_SIZE = WORLD_RADIUS * 2 + 1;
 
 export class AreaScene extends Phaser.Scene {
   private world!: WorldModel;
@@ -17,15 +49,19 @@ export class AreaScene extends Phaser.Scene {
   private nextGraphics!: Phaser.GameObjects.Graphics;
   private debugText!: Phaser.GameObjects.Text;
   private touchControls!: TouchControls;
+  private zoomControls!: ZoomControls;
 
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private keyLeft!: Phaser.Input.Keyboard.Key;
   private keyRight!: Phaser.Input.Keyboard.Key;
   private keyJump!: Phaser.Input.Keyboard.Key;
   private keyAltJump!: Phaser.Input.Keyboard.Key;
+  private zoomLevel: ZoomLevel = 0;
 
   private viewScale = 1;
   private areaPixels = 0;
+  private stagePixels = { width: 0, height: 0 };
+  private worldPixels = { width: 0, height: 0 };
   private viewOffset = { x: 0, y: 0 };
 
   private prevJumpDown = false;
@@ -56,6 +92,13 @@ export class AreaScene extends Phaser.Scene {
     this.keyAltJump = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE) as Phaser.Input.Keyboard.Key;
 
     this.touchControls = new TouchControls(this);
+    this.zoomControls = new ZoomControls(
+      this,
+      () => this.changeZoom(-1),
+      () => this.changeZoom(1)
+    );
+    this.registerZoomKeys();
+    this.updateZoomControls();
 
     this.scale.on(Phaser.Scale.Events.RESIZE, (gameSize: Phaser.Structs.Size) => {
       this.handleResize(gameSize.width, gameSize.height);
@@ -98,6 +141,10 @@ export class AreaScene extends Phaser.Scene {
   }
 
   private startTransition(plan: TransitionPlan, time: number): void {
+    if (this.zoomLevel > 0 && !plan.stageChanged) {
+      this.world.commitTransition();
+      return;
+    }
     this.transition = {
       plan,
       startTime: time,
@@ -127,29 +174,65 @@ export class AreaScene extends Phaser.Scene {
       return;
     }
 
-    const currentArea = currentStage.getArea(currentAreaId);
-
     if (this.transition) {
       const progress = Phaser.Math.Clamp(
         (this.time.now - this.transition.startTime) / this.transition.duration,
         0,
         1
       );
-      const offsets = this.getSlideOffsets(this.transition.plan.direction, progress);
+      const offsets = this.getSlideOffsets(this.transition.plan, progress);
 
-      this.drawArea(this.currentGraphics, currentStage.id, currentArea, true, offsets.current.x, offsets.current.y);
+      this.drawView(
+        this.currentGraphics,
+        currentCoord,
+        currentStage,
+        currentAreaId,
+        true,
+        offsets.current.x,
+        offsets.current.y
+      );
 
       const nextCoord = this.transition.plan.toStage;
       const nextStage = this.world.getStageAt(nextCoord);
       if (nextStage) {
-        const nextArea = nextStage.getArea(this.transition.plan.toArea);
-        this.drawArea(this.nextGraphics, nextStage.id, nextArea, false, offsets.next.x, offsets.next.y);
+        this.drawView(
+          this.nextGraphics,
+          nextCoord,
+          nextStage,
+          this.transition.plan.toArea,
+          false,
+          offsets.next.x,
+          offsets.next.y
+        );
       }
     } else {
-      this.drawArea(this.currentGraphics, currentStage.id, currentArea, true, 0, 0);
+      this.drawView(this.currentGraphics, currentCoord, currentStage, currentAreaId, true, 0, 0);
       this.nextGraphics.clear();
       this.nextGraphics.setPosition(0, 0);
     }
+  }
+
+  private drawView(
+    graphics: Phaser.GameObjects.Graphics,
+    coord: StageCoord,
+    stage: Stage,
+    areaId: AreaId,
+    drawPlayer: boolean,
+    offsetX: number,
+    offsetY: number
+  ): void {
+    if (this.zoomLevel === 0) {
+      const area = stage.getArea(areaId);
+      this.drawArea(graphics, stage.id, area, drawPlayer, offsetX, offsetY);
+      return;
+    }
+
+    if (this.zoomLevel === 1) {
+      this.drawStageOverview(graphics, stage.id, areaId, drawPlayer, offsetX, offsetY);
+      return;
+    }
+
+    this.drawWorldOverview(graphics, coord, stage.id, areaId, drawPlayer, offsetX, offsetY);
   }
 
   private drawArea(
@@ -165,15 +248,15 @@ export class AreaScene extends Phaser.Scene {
 
     const size = this.areaPixels;
     const scale = this.viewScale;
-    const background = this.stageColor(stageId);
+    const palette = this.stagePalette(stageId);
 
-    graphics.fillStyle(background, 1);
+    graphics.fillStyle(palette.floor, 1);
     graphics.fillRect(0, 0, size, size);
 
-    graphics.lineStyle(2, 0x0e1726, 1);
+    graphics.lineStyle(2, palette.ceiling, 1);
     graphics.strokeRect(0, 0, size, size);
 
-    graphics.fillStyle(0x223448, 1);
+    graphics.fillStyle(palette.wall, 1);
     for (const wall of AREA_WALLS) {
       graphics.fillRect(wall.x * scale, wall.y * scale, wall.w * scale, wall.h * scale);
     }
@@ -197,6 +280,126 @@ export class AreaScene extends Phaser.Scene {
     }
   }
 
+  private drawStageOverview(
+    graphics: Phaser.GameObjects.Graphics,
+    stageId: StageId,
+    areaId: AreaId,
+    drawPlayer: boolean,
+    offsetX: number,
+    offsetY: number
+  ): void {
+    graphics.clear();
+    graphics.setPosition(this.viewOffset.x + offsetX, this.viewOffset.y + offsetY);
+
+    const palette = this.stagePalette(stageId);
+    const stageWidth = this.stagePixels.width;
+    const stageHeight = this.stagePixels.height;
+    const areaSize = this.areaPixels;
+
+    graphics.fillStyle(palette.floor, 1);
+    graphics.fillRect(0, 0, stageWidth, stageHeight);
+
+    graphics.lineStyle(2, palette.ceiling, 0.9);
+    graphics.strokeRect(0, 0, stageWidth, stageHeight);
+
+    graphics.lineStyle(1, palette.ceiling, 0.35);
+    graphics.lineBetween(areaSize, 0, areaSize, stageHeight);
+    graphics.lineBetween(0, areaSize, stageWidth, areaSize);
+    graphics.lineBetween(0, areaSize * 2, stageWidth, areaSize * 2);
+
+    const areaPos = AREA_GRID[areaId];
+    graphics.lineStyle(2, 0xf5d76e, 1);
+    graphics.strokeRect(areaPos.col * areaSize, areaPos.row * areaSize, areaSize, areaSize);
+
+    if (drawPlayer) {
+      const player = this.world.player;
+      const px = (areaPos.col * AREA_SIZE + player.x) * this.viewScale;
+      const py = (areaPos.row * AREA_SIZE + player.y) * this.viewScale;
+      const size = Math.max(2, PLAYER_SIZE * this.viewScale);
+      graphics.fillStyle(0x66f0ff, 1);
+      graphics.fillRect(px - size / 2, py - size / 2, size, size);
+    }
+  }
+
+  private drawWorldOverview(
+    graphics: Phaser.GameObjects.Graphics,
+    centerCoord: StageCoord,
+    currentStageId: StageId,
+    areaId: AreaId,
+    drawPlayer: boolean,
+    offsetX: number,
+    offsetY: number
+  ): void {
+    graphics.clear();
+    graphics.setPosition(this.viewOffset.x + offsetX, this.viewOffset.y + offsetY);
+
+    const stageWidth = this.stagePixels.width;
+    const stageHeight = this.stagePixels.height;
+    const areaSize = this.areaPixels;
+    const emptyStageLine = 0x2b3240;
+
+    for (let dy = -WORLD_RADIUS; dy <= WORLD_RADIUS; dy += 1) {
+      for (let dx = -WORLD_RADIUS; dx <= WORLD_RADIUS; dx += 1) {
+        const coord = { sx: centerCoord.sx + dx, sy: centerCoord.sy + dy };
+        const stage = this.world.getStageAt(coord);
+        const gridX = dx + WORLD_RADIUS;
+        const gridY = dy + WORLD_RADIUS;
+        const originX = gridX * stageWidth;
+        const originY = gridY * stageHeight;
+
+        if (!stage) {
+          graphics.lineStyle(1, emptyStageLine, 0.55);
+          graphics.strokeRect(originX, originY, stageWidth, stageHeight);
+
+          graphics.lineStyle(1, emptyStageLine, 0.2);
+          graphics.lineBetween(originX + areaSize, originY, originX + areaSize, originY + stageHeight);
+          graphics.lineBetween(originX, originY + areaSize, originX + stageWidth, originY + areaSize);
+          graphics.lineBetween(originX, originY + areaSize * 2, originX + stageWidth, originY + areaSize * 2);
+          continue;
+        }
+
+        const palette = this.stagePalette(stage.id);
+        graphics.fillStyle(palette.floor, 0.95);
+        graphics.fillRect(originX, originY, stageWidth, stageHeight);
+
+        graphics.lineStyle(1, palette.ceiling, 0.55);
+        graphics.strokeRect(originX, originY, stageWidth, stageHeight);
+
+        graphics.lineStyle(1, palette.ceiling, 0.25);
+        graphics.lineBetween(originX + areaSize, originY, originX + areaSize, originY + stageHeight);
+        graphics.lineBetween(originX, originY + areaSize, originX + stageWidth, originY + areaSize);
+        graphics.lineBetween(originX, originY + areaSize * 2, originX + stageWidth, originY + areaSize * 2);
+      }
+    }
+
+    const centerStageOriginX = WORLD_RADIUS * stageWidth;
+    const centerStageOriginY = WORLD_RADIUS * stageHeight;
+    const highlight = this.stagePalette(currentStageId).ceiling;
+
+    graphics.lineStyle(2, highlight, 1);
+    graphics.strokeRect(centerStageOriginX, centerStageOriginY, stageWidth, stageHeight);
+
+    const areaPos = AREA_GRID[areaId];
+    graphics.lineStyle(2, 0xf5d76e, 1);
+    graphics.strokeRect(
+      centerStageOriginX + areaPos.col * areaSize,
+      centerStageOriginY + areaPos.row * areaSize,
+      areaSize,
+      areaSize
+    );
+
+    if (drawPlayer) {
+      const player = this.world.player;
+      const px =
+        centerStageOriginX + (areaPos.col * AREA_SIZE + player.x) * this.viewScale;
+      const py =
+        centerStageOriginY + (areaPos.row * AREA_SIZE + player.y) * this.viewScale;
+      const size = Math.max(2, PLAYER_SIZE * this.viewScale);
+      graphics.fillStyle(0x66f0ff, 1);
+      graphics.fillRect(px - size / 2, py - size / 2, size, size);
+    }
+  }
+
   private updateDebug(): void {
     const coord = this.world.getCurrentStageCoord();
     const segments = maskToSegments(this.world.getSegmentsMask());
@@ -215,17 +418,53 @@ export class AreaScene extends Phaser.Scene {
   }
 
   private handleResize(width: number, height: number): void {
-    const size = Math.min(width, height);
-    this.viewScale = size / AREA_SIZE;
+    const stageWidthUnits = AREA_SIZE * STAGE_COLS;
+    const stageHeightUnits = AREA_SIZE * STAGE_ROWS;
+    const worldWidthUnits = stageWidthUnits * WORLD_SIZE;
+    const worldHeightUnits = stageHeightUnits * WORLD_SIZE;
+
+    let targetWidthUnits = AREA_SIZE;
+    let targetHeightUnits = AREA_SIZE;
+
+    if (this.zoomLevel === 1) {
+      targetWidthUnits = stageWidthUnits;
+      targetHeightUnits = stageHeightUnits;
+    } else if (this.zoomLevel === 2) {
+      targetWidthUnits = worldWidthUnits;
+      targetHeightUnits = worldHeightUnits;
+    }
+
+    this.viewScale = Math.min(width / targetWidthUnits, height / targetHeightUnits);
     this.areaPixels = AREA_SIZE * this.viewScale;
-    this.viewOffset.x = (width - this.areaPixels) / 2;
-    this.viewOffset.y = (height - this.areaPixels) / 2;
+    this.stagePixels = { width: this.areaPixels * STAGE_COLS, height: this.areaPixels * STAGE_ROWS };
+    this.worldPixels = {
+      width: this.stagePixels.width * WORLD_SIZE,
+      height: this.stagePixels.height * WORLD_SIZE,
+    };
+
+    const targetWidth =
+      this.zoomLevel === 0
+        ? this.areaPixels
+        : this.zoomLevel === 1
+          ? this.stagePixels.width
+          : this.worldPixels.width;
+    const targetHeight =
+      this.zoomLevel === 0
+        ? this.areaPixels
+        : this.zoomLevel === 1
+          ? this.stagePixels.height
+          : this.worldPixels.height;
+
+    this.viewOffset.x = (width - targetWidth) / 2;
+    this.viewOffset.y = (height - targetHeight) / 2;
 
     this.touchControls.layout(width, height);
+    this.zoomControls.layout(width, height);
   }
 
-  private getSlideOffsets(direction: string, progress: number) {
-    const distance = this.areaPixels;
+  private getSlideOffsets(plan: TransitionPlan, progress: number) {
+    const distance = this.getTransitionDistance(plan);
+    const direction = plan.direction;
     switch (direction) {
       case "left":
         return {
@@ -252,26 +491,52 @@ export class AreaScene extends Phaser.Scene {
     }
   }
 
-  private stageColor(stageId: StageId): number {
-    const palette = [
-      0x15212f,
-      0x1b2a3a,
-      0x1d2f36,
-      0x203036,
-      0x24363a,
-      0x223044,
-      0x293842,
-      0x2a3a4f,
-      0x25333a,
-      0x1f2933,
-      0x2f2b2b,
-    ];
-
-    if (stageId === "X") {
-      return palette[10];
+  private getTransitionDistance(plan: TransitionPlan): number {
+    if (this.zoomLevel === 0) {
+      return this.areaPixels;
+    }
+    if (!plan.stageChanged) {
+      return 0;
     }
 
-    const index = Number(stageId);
-    return palette[index % 10];
+    return plan.direction === "left" || plan.direction === "right"
+      ? this.stagePixels.width
+      : this.stagePixels.height;
+  }
+
+  private registerZoomKeys(): void {
+    this.input.keyboard?.on("keydown", (event: KeyboardEvent) => {
+      if (event.repeat) {
+        return;
+      }
+      if (event.key === "+" || event.key === "=" || event.code === "NumpadAdd") {
+        this.changeZoom(-1);
+        return;
+      }
+      if (event.key === "-" || event.key === "_" || event.code === "NumpadSubtract") {
+        this.changeZoom(1);
+      }
+    });
+  }
+
+  private changeZoom(delta: number): void {
+    if (this.transition) {
+      return;
+    }
+    const nextLevel = Phaser.Math.Clamp(this.zoomLevel + delta, 0, 2) as ZoomLevel;
+    if (nextLevel === this.zoomLevel) {
+      return;
+    }
+    this.zoomLevel = nextLevel;
+    this.updateZoomControls();
+    this.handleResize(this.scale.width, this.scale.height);
+  }
+
+  private updateZoomControls(): void {
+    this.zoomControls.setState(this.zoomLevel);
+  }
+
+  private stagePalette(stageId: StageId): { floor: number; wall: number; ceiling: number } {
+    return STAGE_PALETTES[stageId];
   }
 }
