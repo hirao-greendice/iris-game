@@ -6,6 +6,9 @@ new Phaser.Game({
   type: Phaser.AUTO,
   parent: "app",
   backgroundColor: "#0b0f1a",
+  input: {
+    activePointers: 3,
+  },
   scale: {
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
