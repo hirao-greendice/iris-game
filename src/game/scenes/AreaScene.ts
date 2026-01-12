@@ -44,6 +44,7 @@ const STAGE_ROWS = 3;
 const WORLD_RADIUS = 2;
 const WORLD_SIZE = WORLD_RADIUS * 2 + 1;
 const WALL_EDGE_EPSILON = 1e-6;
+const CAMERA_VIEW_SCALE = 1.5;
 
 export class AreaScene extends Phaser.Scene {
   private world!: WorldModel;
@@ -68,6 +69,8 @@ export class AreaScene extends Phaser.Scene {
   private worldPixels = { width: 0, height: 0 };
   private viewOffset = { x: 0, y: 0 };
   private renderArea = { x: 0, y: 0, size: 0 };
+  private cameraOffset = { x: 0, y: 0 };
+  private cameraInitialized = false;
 
   private prevJumpDown = false;
   private transition: { plan: TransitionPlan; startTime: number; duration: number } | null = null;
@@ -128,6 +131,10 @@ export class AreaScene extends Phaser.Scene {
       }
     }
 
+    if (this.zoomLevel === 0 && !this.transition) {
+      this.updateCameraOffset(dt);
+    }
+
     this.render();
     this.updateDebug();
   }
@@ -150,7 +157,7 @@ export class AreaScene extends Phaser.Scene {
   }
 
   private startTransition(plan: TransitionPlan, time: number): void {
-    if (this.zoomLevel > 0 && !plan.stageChanged) {
+    if (!plan.stageChanged) {
       this.world.commitTransition();
       return;
     }
@@ -169,9 +176,13 @@ export class AreaScene extends Phaser.Scene {
     }
     const elapsed = time - this.transition.startTime;
     if (elapsed >= this.transition.duration) {
+      const toArea = this.transition.plan.toArea;
       this.transition = null;
       this.nextGraphics.setVisible(false);
       this.world.commitTransition();
+      if (this.zoomLevel === 0) {
+        this.syncCameraOffset(toArea);
+      }
     }
   }
 
@@ -190,6 +201,17 @@ export class AreaScene extends Phaser.Scene {
         1
       );
       const offsets = this.getSlideOffsets(this.transition.plan, progress);
+      const currentBaseOffset = this.zoomLevel === 0 ? { ...this.cameraOffset } : undefined;
+      const shiftedPlayer =
+        this.zoomLevel === 0 ? this.getShiftedPlayerPosition(this.transition.plan) : null;
+      const nextBaseOffset =
+        this.zoomLevel === 0
+          ? this.getStageCameraTarget(
+              this.transition.plan.toArea,
+              shiftedPlayer!.x,
+              shiftedPlayer!.y
+            )
+          : undefined;
 
       this.drawView(
         this.currentGraphics,
@@ -198,7 +220,8 @@ export class AreaScene extends Phaser.Scene {
         currentAreaId,
         true,
         offsets.current.x,
-        offsets.current.y
+        offsets.current.y,
+        currentBaseOffset
       );
 
       const nextCoord = this.transition.plan.toStage;
@@ -211,7 +234,8 @@ export class AreaScene extends Phaser.Scene {
           this.transition.plan.toArea,
           false,
           offsets.next.x,
-          offsets.next.y
+          offsets.next.y,
+          nextBaseOffset
         );
       }
     } else {
@@ -228,11 +252,11 @@ export class AreaScene extends Phaser.Scene {
     areaId: AreaId,
     drawPlayer: boolean,
     offsetX: number,
-    offsetY: number
+    offsetY: number,
+    baseOffset?: { x: number; y: number }
   ): void {
     if (this.zoomLevel === 0) {
-      const area = stage.getArea(areaId);
-      this.drawArea(graphics, stage.id, areaId, area, drawPlayer, offsetX, offsetY);
+      this.drawStageFollow(graphics, stage, stage.id, areaId, drawPlayer, offsetX, offsetY, baseOffset);
       return;
     }
 
@@ -244,57 +268,86 @@ export class AreaScene extends Phaser.Scene {
     this.drawWorldOverview(graphics, coord, stage.id, areaId, drawPlayer, offsetX, offsetY);
   }
 
-  private drawArea(
+  private drawStageFollow(
     graphics: Phaser.GameObjects.Graphics,
+    stage: Stage,
     stageId: StageId,
     areaId: AreaId,
-    area: { walkers: { x: number; y: number }[]; blocks: Rect[] },
     drawPlayer: boolean,
     offsetX: number,
-    offsetY: number
+    offsetY: number,
+    baseOffset?: { x: number; y: number }
   ): void {
     graphics.clear();
-    graphics.setPosition(this.viewOffset.x + offsetX, this.viewOffset.y + offsetY);
+    const cameraBase = baseOffset ?? this.cameraOffset;
+    graphics.setPosition(cameraBase.x + offsetX, cameraBase.y + offsetY);
 
-    const size = this.areaPixels;
-    const scale = this.viewScale;
     const palette = this.stagePalette(stageId);
+    const stageWidth = this.stagePixels.width;
+    const stageHeight = this.stagePixels.height;
+    const areaSize = this.areaPixels;
+    const scale = this.viewScale;
 
     graphics.fillStyle(palette.floor, 1);
-    graphics.fillRect(0, 0, size, size);
+    graphics.fillRect(0, 0, stageWidth, stageHeight);
 
-    graphics.lineStyle(2, palette.ceiling, 1);
-    graphics.strokeRect(0, 0, size, size);
+    graphics.lineStyle(2, palette.ceiling, 0.9);
+    graphics.strokeRect(0, 0, stageWidth, stageHeight);
+
+    graphics.lineStyle(1, palette.ceiling, 0.2);
+    graphics.lineBetween(areaSize, 0, areaSize, stageHeight);
+    graphics.lineBetween(0, areaSize, stageWidth, areaSize);
+    graphics.lineBetween(0, areaSize * 2, stageWidth, areaSize * 2);
 
     const edgeWallColor = this.brightenColor(palette.wall, 0.45);
-    for (const wall of AREA_WALLS) {
-      const wallColor = this.isStageEdgeWall(areaId, wall) ? edgeWallColor : palette.wall;
-      graphics.fillStyle(wallColor, 1);
-      graphics.fillRect(wall.x * scale, wall.y * scale, wall.w * scale, wall.h * scale);
-    }
-    if (area.blocks.length > 0) {
-      graphics.fillStyle(palette.wall, 1);
-      for (const block of area.blocks) {
-        graphics.fillRect(block.x * scale, block.y * scale, block.w * scale, block.h * scale);
+    for (const id of AREA_IDS) {
+      const areaPos = AREA_GRID[id];
+      const baseX = areaPos.col * areaSize;
+      const baseY = areaPos.row * areaSize;
+      for (const wall of AREA_WALLS) {
+        const wallColor = this.isStageEdgeWall(id, wall) ? edgeWallColor : palette.wall;
+        graphics.fillStyle(wallColor, 1);
+        graphics.fillRect(
+          baseX + wall.x * scale,
+          baseY + wall.y * scale,
+          wall.w * scale,
+          wall.h * scale
+        );
       }
-    }
 
-    graphics.fillStyle(0xf1c40f, 1);
-    for (const walker of area.walkers) {
-      const half = (WALKER_SIZE / 2) * scale;
-      graphics.fillRect(walker.x * scale - half, walker.y * scale - half, WALKER_SIZE * scale, WALKER_SIZE * scale);
+      const area = stage.getArea(id);
+      if (area.blocks.length > 0) {
+        graphics.fillStyle(palette.wall, 1);
+        for (const block of area.blocks) {
+          graphics.fillRect(
+            baseX + block.x * scale,
+            baseY + block.y * scale,
+            block.w * scale,
+            block.h * scale
+          );
+        }
+      }
+
+      graphics.fillStyle(0xf1c40f, 1);
+      for (const walker of area.walkers) {
+        const half = (WALKER_SIZE / 2) * scale;
+        graphics.fillRect(
+          baseX + walker.x * scale - half,
+          baseY + walker.y * scale - half,
+          WALKER_SIZE * scale,
+          WALKER_SIZE * scale
+        );
+      }
     }
 
     if (drawPlayer) {
       const player = this.world.player;
+      const areaPos = AREA_GRID[areaId];
+      const px = (areaPos.col * AREA_SIZE + player.x) * scale;
+      const py = (areaPos.row * AREA_SIZE + player.y) * scale;
       const half = (PLAYER_SIZE / 2) * scale;
       graphics.fillStyle(0x66f0ff, 1);
-      graphics.fillRect(
-        player.x * scale - half,
-        player.y * scale - half,
-        PLAYER_SIZE * scale,
-        PLAYER_SIZE * scale
-      );
+      graphics.fillRect(px - half, py - half, PLAYER_SIZE * scale, PLAYER_SIZE * scale);
     }
   }
 
@@ -466,7 +519,8 @@ export class AreaScene extends Phaser.Scene {
       targetHeightUnits = worldHeightUnits;
     }
 
-    this.viewScale = Math.min(renderSize / targetWidthUnits, renderSize / targetHeightUnits);
+    this.viewScale =
+      Math.min(renderSize / targetWidthUnits, renderSize / targetHeightUnits) / CAMERA_VIEW_SCALE;
     this.areaPixels = AREA_SIZE * this.viewScale;
     this.stagePixels = { width: this.areaPixels * STAGE_COLS, height: this.areaPixels * STAGE_ROWS };
     this.worldPixels = {
@@ -492,6 +546,10 @@ export class AreaScene extends Phaser.Scene {
 
     this.touchControls.layout(width, height);
     this.zoomControls.layout(width, height);
+
+    if (this.zoomLevel === 0) {
+      this.syncCameraOffset();
+    }
   }
 
   private getSlideOffsets(plan: TransitionPlan, progress: number) {
@@ -524,9 +582,6 @@ export class AreaScene extends Phaser.Scene {
   }
 
   private getTransitionDistance(plan: TransitionPlan): number {
-    if (this.zoomLevel === 0) {
-      return this.areaPixels;
-    }
     if (!plan.stageChanged) {
       return 0;
     }
@@ -562,6 +617,9 @@ export class AreaScene extends Phaser.Scene {
     this.zoomLevel = nextLevel;
     this.updateZoomControls();
     this.handleResize(this.scale.width, this.scale.height);
+    if (this.zoomLevel === 0) {
+      this.syncCameraOffset();
+    }
   }
 
   private updateZoomControls(): void {
@@ -577,6 +635,86 @@ export class AreaScene extends Phaser.Scene {
       this.renderArea.size,
       this.renderArea.size
     );
+  }
+
+  private updateCameraOffset(dt: number): void {
+    const areaId = this.world.getCurrentAreaId();
+    const target = this.getStageCameraTarget(areaId, this.world.player.x, this.world.player.y);
+    if (!this.cameraInitialized) {
+      this.cameraOffset = target;
+      this.cameraInitialized = true;
+      return;
+    }
+    const t = 1 - Math.pow(0.001, dt);
+    this.cameraOffset.x = Phaser.Math.Linear(this.cameraOffset.x, target.x, t);
+    this.cameraOffset.y = Phaser.Math.Linear(this.cameraOffset.y, target.y, t);
+  }
+
+  private syncCameraOffset(areaId?: AreaId): void {
+    const resolvedArea = areaId ?? this.world.getCurrentAreaId();
+    this.cameraOffset = this.getStageCameraTarget(resolvedArea, this.world.player.x, this.world.player.y);
+    this.cameraInitialized = true;
+  }
+
+  private getStageCameraTarget(areaId: AreaId, playerX: number, playerY: number): { x: number; y: number } {
+    const areaPos = AREA_GRID[areaId];
+    const px = (areaPos.col * AREA_SIZE + playerX) * this.viewScale;
+    const py = (areaPos.row * AREA_SIZE + playerY) * this.viewScale;
+    return this.getClampedCameraOffset(px, py);
+  }
+
+  private getClampedCameraOffset(targetX: number, targetY: number): { x: number; y: number } {
+    const viewportSize = this.renderArea.size;
+    const stageWidth = this.stagePixels.width;
+    const stageHeight = this.stagePixels.height;
+
+    let offsetX = this.renderArea.x + viewportSize / 2 - targetX;
+    let offsetY = this.renderArea.y + viewportSize / 2 - targetY;
+
+    if (stageWidth <= viewportSize) {
+      offsetX = this.renderArea.x + (viewportSize - stageWidth) / 2;
+    } else {
+      offsetX = Phaser.Math.Clamp(
+        offsetX,
+        this.renderArea.x + viewportSize - stageWidth,
+        this.renderArea.x
+      );
+    }
+
+    if (stageHeight <= viewportSize) {
+      offsetY = this.renderArea.y + (viewportSize - stageHeight) / 2;
+    } else {
+      offsetY = Phaser.Math.Clamp(
+        offsetY,
+        this.renderArea.y + viewportSize - stageHeight,
+        this.renderArea.y
+      );
+    }
+
+    return { x: offsetX, y: offsetY };
+  }
+
+  private getShiftedPlayerPosition(plan: TransitionPlan): { x: number; y: number } {
+    const player = this.world.player;
+    let x = player.x;
+    let y = player.y;
+
+    switch (plan.direction) {
+      case "left":
+        x += AREA_SIZE;
+        break;
+      case "right":
+        x -= AREA_SIZE;
+        break;
+      case "up":
+        y += AREA_SIZE;
+        break;
+      case "down":
+        y -= AREA_SIZE;
+        break;
+    }
+
+    return { x, y };
   }
 
   private drawStageEdgeHighlights(
