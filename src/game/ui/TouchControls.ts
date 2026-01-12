@@ -8,6 +8,7 @@ export class TouchControls {
   private readonly leftLabel: Phaser.GameObjects.Text;
   private readonly rightLabel: Phaser.GameObjects.Text;
   private readonly jumpLabel: Phaser.GameObjects.Text;
+  private readonly pointerButtons = new Map<number, "left" | "right" | "jump">();
   private leftDown = false;
   private rightDown = false;
   private jumpDown = false;
@@ -44,22 +45,36 @@ export class TouchControls {
       this.jumpLabel,
     ]);
 
-    this.registerButton(this.leftButton, () => {
-      this.leftDown = true;
-    }, () => {
-      this.leftDown = false;
+    scene.input.on(Phaser.Input.Events.POINTER_DOWN, (pointer: Phaser.Input.Pointer) => {
+      const button = this.hitTest(pointer);
+      if (button) {
+        this.pointerButtons.set(pointer.id, button);
+        this.updateDownStates();
+      }
     });
-
-    this.registerButton(this.rightButton, () => {
-      this.rightDown = true;
-    }, () => {
-      this.rightDown = false;
+    scene.input.on(Phaser.Input.Events.POINTER_MOVE, (pointer: Phaser.Input.Pointer) => {
+      if (!pointer.isDown) {
+        return;
+      }
+      const button = this.hitTest(pointer);
+      if (button) {
+        this.pointerButtons.set(pointer.id, button);
+      } else {
+        this.pointerButtons.delete(pointer.id);
+      }
+      this.updateDownStates();
     });
-
-    this.registerButton(this.jumpButton, () => {
-      this.jumpDown = true;
-    }, () => {
-      this.jumpDown = false;
+    scene.input.on(Phaser.Input.Events.POINTER_UP, (pointer: Phaser.Input.Pointer) => {
+      this.pointerButtons.delete(pointer.id);
+      this.updateDownStates();
+    });
+    scene.input.on(Phaser.Input.Events.POINTER_UP_OUTSIDE, (pointer: Phaser.Input.Pointer) => {
+      this.pointerButtons.delete(pointer.id);
+      this.updateDownStates();
+    });
+    scene.input.on(Phaser.Input.Events.POINTER_OUT, (pointer: Phaser.Input.Pointer) => {
+      this.pointerButtons.delete(pointer.id);
+      this.updateDownStates();
     });
 
     this.leftLabel.setData("button", this.leftButton);
@@ -93,15 +108,34 @@ export class TouchControls {
     };
   }
 
-  private registerButton(
-    button: Phaser.GameObjects.Rectangle,
-    onDown: () => void,
-    onUp: () => void
-  ): void {
-    button.setInteractive({ useHandCursor: false });
-    button.on(Phaser.Input.Events.POINTER_DOWN, onDown);
-    button.on(Phaser.Input.Events.POINTER_UP, onUp);
-    button.on(Phaser.Input.Events.POINTER_OUT, onUp);
-    button.on(Phaser.Input.Events.POINTER_UP_OUTSIDE, onUp);
+  private hitTest(pointer: Phaser.Input.Pointer): "left" | "right" | "jump" | null {
+    const x = pointer.x;
+    const y = pointer.y;
+    if (this.leftButton.getBounds().contains(x, y)) {
+      return "left";
+    }
+    if (this.rightButton.getBounds().contains(x, y)) {
+      return "right";
+    }
+    if (this.jumpButton.getBounds().contains(x, y)) {
+      return "jump";
+    }
+    return null;
+  }
+
+  private updateDownStates(): void {
+    // Allow multi-touch and sliding between buttons without losing input.
+    this.leftDown = false;
+    this.rightDown = false;
+    this.jumpDown = false;
+    for (const button of this.pointerButtons.values()) {
+      if (button === "left") {
+        this.leftDown = true;
+      } else if (button === "right") {
+        this.rightDown = true;
+      } else {
+        this.jumpDown = true;
+      }
+    }
   }
 }
