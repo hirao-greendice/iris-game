@@ -16,24 +16,24 @@ export class TouchControls {
   constructor(scene: Phaser.Scene) {
     this.container = scene.add.container(0, 0).setDepth(20);
 
-    this.leftButton = scene.add.rectangle(0, 0, 80, 80, 0x1b2c3f, 0.5).setOrigin(0.5);
-    this.rightButton = scene.add.rectangle(0, 0, 80, 80, 0x1b2c3f, 0.5).setOrigin(0.5);
-    this.jumpButton = scene.add.rectangle(0, 0, 80, 80, 0x2b3f2b, 0.5).setOrigin(0.5);
+    this.leftButton = scene.add.rectangle(0, 0, 80, 80, 0x2a4a9b, 0.75).setOrigin(0.5);
+    this.rightButton = scene.add.rectangle(0, 0, 80, 80, 0x2a4a9b, 0.75).setOrigin(0.5);
+    this.jumpButton = scene.add.rectangle(0, 0, 80, 80, 0x2b7a3d, 0.75).setOrigin(0.5);
 
     this.leftLabel = scene.add.text(0, 0, "L", {
       fontFamily: "Consolas, monospace",
       fontSize: "20px",
-      color: "#d8e6ff",
+      color: "#f7fbff",
     }).setOrigin(0.5);
     this.rightLabel = scene.add.text(0, 0, "R", {
       fontFamily: "Consolas, monospace",
       fontSize: "20px",
-      color: "#d8e6ff",
+      color: "#f7fbff",
     }).setOrigin(0.5);
     this.jumpLabel = scene.add.text(0, 0, "J", {
       fontFamily: "Consolas, monospace",
       fontSize: "20px",
-      color: "#d8ffd8",
+      color: "#f3fff3",
     }).setOrigin(0.5);
 
     this.container.add([
@@ -83,8 +83,8 @@ export class TouchControls {
   }
 
   layout(width: number, height: number): void {
-    const size = Math.max(56, Math.min(width, height) * 0.12);
-    const padding = Math.max(12, Math.min(width, height) * 0.03);
+    const size = Math.max(112, Math.min(width, height) * 0.24);
+    const padding = Math.max(14, Math.min(width, height) * 0.035);
     const y = height - size / 2 - padding;
 
     this.leftButton.setSize(size, size);
