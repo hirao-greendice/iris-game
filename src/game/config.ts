@@ -1,4 +1,4 @@
-export const AREA_SIZE = 15;
+export const AREA_SIZE = 10;
 export const PLAYER_SIZE = 1;
 export const PLAYER_HALF = PLAYER_SIZE / 2;
 
