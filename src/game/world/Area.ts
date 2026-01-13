@@ -16,6 +16,7 @@ const AREA_GRID: Record<AreaId, { col: number; row: number }> = {
   F: { col: 1, row: 2 },
 };
 
+
 const STAGE_COLS = 2;
 const STAGE_ROWS = 3;
 
