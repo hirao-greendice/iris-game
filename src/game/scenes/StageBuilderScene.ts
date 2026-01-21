@@ -1600,6 +1600,74 @@ export class StageBuilderScene extends Phaser.Scene {
     return rotate ? { w: def.h, h: def.w } : { w: def.w, h: def.h };
   }
 
+  private getRotationOffset(type: BuilderTool, rotation: Rotation): { x: number; y: number } {
+    const def = TOOL_DEFS[type];
+    const size = this.getElementSize(type, rotation);
+    const center = 0.5;
+    const dx = def.w * 0.5 - center;
+    const dy = def.h * 0.5 - center;
+    let rdx = dx;
+    let rdy = dy;
+    if (rotation === 90) {
+      rdx = -dy;
+      rdy = dx;
+    } else if (rotation === 180) {
+      rdx = -dx;
+      rdy = -dy;
+    } else if (rotation === 270) {
+      rdx = dy;
+      rdy = -dx;
+    }
+    const centerX = center + rdx;
+    const centerY = center + rdy;
+    return { x: centerX - size.w * 0.5, y: centerY - size.h * 0.5 };
+  }
+
+  private getCellOriginFromPosition(
+    x: number,
+    y: number,
+    type: BuilderTool,
+    rotation: Rotation
+  ): { x: number; y: number } {
+    const offset = this.getRotationOffset(type, rotation);
+    return {
+      x: snap(x - offset.x, GRID_STEP),
+      y: snap(y - offset.y, GRID_STEP),
+    };
+  }
+
+  private clampCellOrigin(
+    cellX: number,
+    cellY: number,
+    type: BuilderTool,
+    rotation: Rotation
+  ): { x: number; y: number } {
+    const size = this.getElementSize(type, rotation);
+    const offset = this.getRotationOffset(type, rotation);
+    const bounds = this.getViewBounds();
+    const minX = Math.ceil(bounds.x - offset.x);
+    const maxX = Math.floor(bounds.x + bounds.w - size.w - offset.x);
+    const minY = Math.ceil(bounds.y - offset.y);
+    const maxY = Math.floor(bounds.y + bounds.h - size.h - offset.y);
+    return {
+      x: clamp(cellX, minX, maxX),
+      y: clamp(cellY, minY, maxY),
+    };
+  }
+
+  private positionFromCell(
+    cellX: number,
+    cellY: number,
+    type: BuilderTool,
+    rotation: Rotation
+  ): { x: number; y: number } {
+    const offset = this.getRotationOffset(type, rotation);
+    return {
+      x: snap(cellX + offset.x, 0.001),
+      y: snap(cellY + offset.y, 0.001),
+    };
+  }
+
   private screenToWorld(screenX: number, screenY: number): { x: number; y: number } | null {
     const { grid } = this.layout;
     if (!pointInRect(screenX, screenY, { x: grid.x, y: grid.y, w: grid.w, h: grid.h })) {
@@ -1699,14 +1767,9 @@ export class StageBuilderScene extends Phaser.Scene {
     type: BuilderTool,
     rotation: Rotation
   ): { x: number; y: number } {
-    const size = this.getElementSize(type, rotation);
-    const snappedX = snap(x, GRID_STEP);
-    const snappedY = snap(y, GRID_STEP);
-    const bounds = this.getViewBounds();
-    return {
-      x: clamp(snappedX, bounds.x, bounds.x + bounds.w - size.w),
-      y: clamp(snappedY, bounds.y, bounds.y + bounds.h - size.h),
-    };
+    const cell = this.getCellOriginFromPosition(x, y, type, rotation);
+    const clampedCell = this.clampCellOrigin(cell.x, cell.y, type, rotation);
+    return this.positionFromCell(clampedCell.x, clampedCell.y, type, rotation);
   }
 
   private rotateSelection(delta: number): void {
@@ -1715,11 +1778,13 @@ export class StageBuilderScene extends Phaser.Scene {
       const stage = this.getCurrentStage();
       const element = stage.elements.find((item) => item.id === this.selectedElementId);
       if (element) {
+        const cell = this.getCellOriginFromPosition(element.x, element.y, element.type, element.rotation);
         element.rotation = normalizeRotation(element.rotation + delta);
         this.currentRotation = element.rotation;
-        const clamped = this.clampElementPosition(element.x, element.y, element.type, element.rotation);
-        element.x = clamped.x;
-        element.y = clamped.y;
+        const clampedCell = this.clampCellOrigin(cell.x, cell.y, element.type, element.rotation);
+        const nextPosition = this.positionFromCell(clampedCell.x, clampedCell.y, element.type, element.rotation);
+        element.x = nextPosition.x;
+        element.y = nextPosition.y;
         this.saveToStorage();
       }
     } else {
