@@ -1,5 +1,6 @@
 import "./style.css";
 import Phaser from "phaser";
+import { StageBuilderScene } from "./game/scenes/StageBuilderScene";
 import { AreaScene } from "./game/scenes/AreaScene";
 
 new Phaser.Game({
@@ -13,5 +14,5 @@ new Phaser.Game({
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [AreaScene],
+  scene: [StageBuilderScene, AreaScene],
 });

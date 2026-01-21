@@ -87,6 +87,9 @@ export class AreaScene extends Phaser.Scene {
     this.keyRight = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.D) as Phaser.Input.Keyboard.Key;
     this.keyJump = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.W) as Phaser.Input.Keyboard.Key;
     this.keyAltJump = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE) as Phaser.Input.Keyboard.Key;
+    this.input.keyboard?.on("keydown-B", () => {
+      this.scene.start("StageBuilderScene");
+    });
 
     this.touchControls = new TouchControls(this);
     this.zoomControls = new ZoomControls(
@@ -511,6 +514,7 @@ export class AreaScene extends Phaser.Scene {
         `Area: ${this.world.getCurrentAreaId()}`,
         `Segments: ${segmentText}`,
         `Predicted: ${predicted}`,
+        "Press B: Builder",
       ].join("\n")
     );
   }
