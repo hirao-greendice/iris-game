@@ -14,6 +14,17 @@ const LEVEL_HEIGHT = 100;
 const LEVEL_1 = buildLevel(LEVEL_WIDTH, LEVEL_HEIGHT);
 
 type Pos = { x: number; y: number };
+type Dir = { dx: number; dy: number };
+type QueuedMove = { dx: number; dy: number; moveMs: number };
+type UndoState = { playerPos: Pos; crates: Set<string> };
+
+const MOVE_MS = 120;
+const MOVE_FAST_MS = 70;
+const HOLD_DELAY_MS = 220;
+const HOLD_REPEAT_MS = 90;
+const HOLD_FAST_AFTER_MS = 600;
+const HOLD_FAST_REPEAT_MS = 60;
+const MAX_QUEUE = 1;
 
 type Layout = {
   width: number;
@@ -130,6 +141,15 @@ class GameScene extends Phaser.Scene {
   private infoText!: Phaser.GameObjects.Text;
   private hasWon = false;
   private isAnimating = false;
+  private inputQueue: QueuedMove[] = [];
+  private undoStack: UndoState[] = [];
+  private pendingUndo = 0;
+  private keyDownAt = new Map<string, number>();
+  private activeKeys: string[] = [];
+  private heldKey: string | null = null;
+  private heldDir: Dir | null = null;
+  private holdStart = 0;
+  private nextRepeatAt = 0;
 
   constructor() {
     super('game');
@@ -152,35 +172,92 @@ class GameScene extends Phaser.Scene {
     this.updateInfoText();
 
     this.input.keyboard?.on('keydown', (event: KeyboardEvent) => {
+      if (event.repeat) {
+        return;
+      }
       const keyName = event.key.toLowerCase();
       if (keyName === 'r') {
         this.resetState();
         return;
       }
+      if (keyName === 'u') {
+        this.enqueueUndo();
+        return;
+      }
       if (this.hasWon) {
         return;
       }
-      switch (keyName) {
-        case 'arrowup':
-        case 'w':
-          this.tryMove(0, -1);
-          break;
-        case 'arrowdown':
-        case 's':
-          this.tryMove(0, 1);
-          break;
-        case 'arrowleft':
-        case 'a':
-          this.tryMove(-1, 0);
-          break;
-        case 'arrowright':
-        case 'd':
-          this.tryMove(1, 0);
-          break;
-        default:
-          break;
+
+      const dir = this.keyToDir(keyName);
+      if (!dir) {
+        return;
+      }
+
+      if (!this.keyDownAt.has(keyName)) {
+        this.keyDownAt.set(keyName, this.time.now);
+        this.activeKeys.push(keyName);
+      }
+
+      this.heldKey = keyName;
+      this.heldDir = dir;
+      this.holdStart = this.keyDownAt.get(keyName) ?? this.time.now;
+      this.nextRepeatAt = this.time.now + HOLD_DELAY_MS;
+      this.enqueueMove(dir, MOVE_MS);
+    });
+
+    this.input.keyboard?.on('keyup', (event: KeyboardEvent) => {
+      const keyName = event.key.toLowerCase();
+      if (!this.keyDownAt.has(keyName)) {
+        return;
+      }
+      this.keyDownAt.delete(keyName);
+      this.activeKeys = this.activeKeys.filter((name) => name !== keyName);
+
+      if (this.heldKey === keyName) {
+        const nextHeld = this.activeKeys[this.activeKeys.length - 1] ?? null;
+        this.heldKey = nextHeld;
+        this.heldDir = nextHeld ? this.keyToDir(nextHeld) : null;
+        if (nextHeld) {
+          this.holdStart = this.keyDownAt.get(nextHeld) ?? this.time.now;
+          this.nextRepeatAt = this.time.now + HOLD_DELAY_MS;
+        } else {
+          this.holdStart = 0;
+          this.nextRepeatAt = 0;
+        }
       }
     });
+  }
+
+  update(time: number) {
+    if (this.isAnimating) {
+      return;
+    }
+
+    if (this.pendingUndo > 0) {
+      this.performUndo();
+      return;
+    }
+
+    if (this.inputQueue.length > 0) {
+      const move = this.inputQueue.shift();
+      if (move) {
+        this.tryMove(move.dx, move.dy, move.moveMs);
+      }
+      return;
+    }
+
+    if (!this.heldDir || this.hasWon) {
+      return;
+    }
+
+    if (time < this.nextRepeatAt) {
+      return;
+    }
+
+    this.tryMove(this.heldDir.dx, this.heldDir.dy, MOVE_FAST_MS);
+    const heldFor = time - this.holdStart;
+    const interval = heldFor >= HOLD_FAST_AFTER_MS ? HOLD_FAST_REPEAT_MS : HOLD_REPEAT_MS;
+    this.nextRepeatAt = time + interval;
   }
 
   private setupCamera() {
@@ -259,6 +336,15 @@ class GameScene extends Phaser.Scene {
     }
 
     this.hasWon = false;
+    this.inputQueue = [];
+    this.undoStack = [];
+    this.pendingUndo = 0;
+    this.keyDownAt.clear();
+    this.activeKeys = [];
+    this.heldKey = null;
+    this.heldDir = null;
+    this.holdStart = 0;
+    this.nextRepeatAt = 0;
     this.updateInfoText();
   }
 
@@ -298,7 +384,7 @@ class GameScene extends Phaser.Scene {
     return total;
   }
 
-  private tryMove(dx: number, dy: number) {
+  private tryMove(dx: number, dy: number, moveMs = MOVE_MS) {
     if (this.isAnimating) {
       return;
     }
@@ -306,6 +392,8 @@ class GameScene extends Phaser.Scene {
     if (this.isWall(next.x, next.y)) {
       return;
     }
+
+    this.pushUndoState();
 
     const nextKey = key(next.x, next.y);
     let pushedCrate: { sprite: Phaser.GameObjects.Sprite; target: Pos } | null = null;
@@ -332,12 +420,13 @@ class GameScene extends Phaser.Scene {
     }
 
     this.playerPos = next;
-    this.playMoveAnimation(next, pushedCrate);
+    this.playMoveAnimation(next, pushedCrate, moveMs);
   }
 
   private playMoveAnimation(
     next: Pos,
     pushedCrate: { sprite: Phaser.GameObjects.Sprite; target: Pos } | null,
+    moveMs: number,
   ) {
     this.isAnimating = true;
 
@@ -357,7 +446,7 @@ class GameScene extends Phaser.Scene {
       targets: this.player,
       x: playerWorld.x,
       y: playerWorld.y,
-      duration: 120,
+      duration: moveMs,
       ease: 'Sine.easeOut',
       onComplete: finish,
     });
@@ -368,7 +457,7 @@ class GameScene extends Phaser.Scene {
         targets: pushedCrate.sprite,
         x: crateWorld.x,
         y: crateWorld.y,
-        duration: 120,
+        duration: moveMs,
         ease: 'Sine.easeOut',
         onComplete: finish,
       });
@@ -391,6 +480,91 @@ class GameScene extends Phaser.Scene {
       x: PADDING + x * TILE + TILE / 2,
       y: PADDING + y * TILE + TILE / 2,
     };
+  }
+
+  private keyToDir(keyName: string): Dir | null {
+    switch (keyName) {
+      case 'arrowup':
+      case 'w':
+        return { dx: 0, dy: -1 };
+      case 'arrowdown':
+      case 's':
+        return { dx: 0, dy: 1 };
+      case 'arrowleft':
+      case 'a':
+        return { dx: -1, dy: 0 };
+      case 'arrowright':
+      case 'd':
+        return { dx: 1, dy: 0 };
+      default:
+        return null;
+    }
+  }
+
+  private enqueueMove(dir: Dir, moveMs: number) {
+    if (this.inputQueue.length >= MAX_QUEUE) {
+      return;
+    }
+    this.inputQueue.push({ dx: dir.dx, dy: dir.dy, moveMs });
+  }
+
+  private enqueueUndo() {
+    this.pendingUndo = Math.min(this.pendingUndo + 1, MAX_QUEUE);
+    this.inputQueue = [];
+  }
+
+  private pushUndoState() {
+    const snapshot: UndoState = {
+      playerPos: { ...this.playerPos },
+      crates: new Set(this.crates),
+    };
+    this.undoStack.push(snapshot);
+  }
+
+  private performUndo() {
+    if (this.undoStack.length === 0) {
+      this.pendingUndo = 0;
+      return;
+    }
+    const state = this.undoStack.pop();
+    if (!state) {
+      this.pendingUndo = 0;
+      return;
+    }
+
+    this.pendingUndo = Math.max(0, this.pendingUndo - 1);
+    this.playerPos = { ...state.playerPos };
+    this.crates = new Set(state.crates);
+    this.syncCrateSprites();
+
+    const playerWorld = this.toWorld(this.playerPos.x, this.playerPos.y);
+    this.player.setPosition(playerWorld.x, playerWorld.y);
+
+    this.hasWon = this.countCratesOnGoals() === this.countGoals();
+    this.updateInfoText();
+  }
+
+  private syncCrateSprites() {
+    const desiredKeys = new Set(this.crates);
+
+    this.crateSprites.forEach((sprite, posKey) => {
+      if (!desiredKeys.has(posKey)) {
+        sprite.destroy();
+        this.crateSprites.delete(posKey);
+      }
+    });
+
+    this.crates.forEach((posKey) => {
+      let sprite = this.crateSprites.get(posKey);
+      const [x, y] = posKey.split(',').map((value) => Number(value));
+      const world = this.toWorld(x, y);
+      if (!sprite) {
+        sprite = this.add.sprite(world.x, world.y, 'tile-crate').setDepth(3);
+        this.crateSprites.set(posKey, sprite);
+      } else {
+        sprite.setPosition(world.x, world.y);
+      }
+    });
   }
 }
 
