@@ -2,8 +2,8 @@ import Phaser from 'phaser';
 
 const TILE = 48;
 const PADDING = 16;
-const VIEW_TILES_X = 16;
-const VIEW_TILES_Y = 12;
+const VIEW_TILES_X = 10;
+const VIEW_TILES_Y = 10;
 
 const VIEW_WIDTH = PADDING * 2 + VIEW_TILES_X * TILE;
 const VIEW_HEIGHT = PADDING * 2 + VIEW_TILES_Y * TILE;
@@ -15,6 +15,7 @@ const LEVEL_1 = buildLevel(LEVEL_WIDTH, LEVEL_HEIGHT);
 
 type Pos = { x: number; y: number };
 type Dir = { dx: number; dy: number };
+export type DirectionName = 'up' | 'down' | 'left' | 'right';
 type QueuedMove = { dx: number; dy: number; moveMs: number };
 type UndoState = { playerPos: Pos; crates: Set<string> };
 
@@ -24,7 +25,7 @@ const HOLD_DELAY_MS = 220;
 const HOLD_REPEAT_MS = 90;
 const HOLD_FAST_AFTER_MS = 600;
 const HOLD_FAST_REPEAT_MS = 60;
-const MAX_QUEUE = 1;
+const MAX_QUEUE = 6;
 
 type Layout = {
   width: number;
@@ -132,7 +133,7 @@ const LAYOUT = parseLevel(LEVEL_1);
 const WORLD_WIDTH = PADDING * 2 + LAYOUT.width * TILE;
 const WORLD_HEIGHT = PADDING * 2 + LAYOUT.height * TILE;
 
-class GameScene extends Phaser.Scene {
+export class GameScene extends Phaser.Scene {
   private layout: Layout = LAYOUT;
   private crates = new Set<string>();
   private crateSprites = new Map<string, Phaser.GameObjects.Sprite>();
@@ -150,6 +151,9 @@ class GameScene extends Phaser.Scene {
   private heldDir: Dir | null = null;
   private holdStart = 0;
   private nextRepeatAt = 0;
+  private touchHeldDir: Dir | null = null;
+  private touchHoldStart = 0;
+  private touchNextRepeatAt = 0;
 
   constructor() {
     super('game');
@@ -246,18 +250,26 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (!this.heldDir || this.hasWon) {
+    const usingTouch = Boolean(this.touchHeldDir);
+    const heldDir = usingTouch ? this.touchHeldDir : this.heldDir;
+    if (!heldDir || this.hasWon) {
       return;
     }
 
-    if (time < this.nextRepeatAt) {
+    const nextRepeatAt = usingTouch ? this.touchNextRepeatAt : this.nextRepeatAt;
+    if (time < nextRepeatAt) {
       return;
     }
 
-    this.tryMove(this.heldDir.dx, this.heldDir.dy, MOVE_FAST_MS);
-    const heldFor = time - this.holdStart;
+    this.tryMove(heldDir.dx, heldDir.dy, MOVE_FAST_MS);
+    const holdStart = usingTouch ? this.touchHoldStart : this.holdStart;
+    const heldFor = time - holdStart;
     const interval = heldFor >= HOLD_FAST_AFTER_MS ? HOLD_FAST_REPEAT_MS : HOLD_REPEAT_MS;
-    this.nextRepeatAt = time + interval;
+    if (usingTouch) {
+      this.touchNextRepeatAt = time + interval;
+    } else {
+      this.nextRepeatAt = time + interval;
+    }
   }
 
   private setupCamera() {
@@ -345,6 +357,9 @@ class GameScene extends Phaser.Scene {
     this.heldDir = null;
     this.holdStart = 0;
     this.nextRepeatAt = 0;
+    this.touchHeldDir = null;
+    this.touchHoldStart = 0;
+    this.touchNextRepeatAt = 0;
     this.updateInfoText();
   }
 
@@ -501,11 +516,56 @@ class GameScene extends Phaser.Scene {
     }
   }
 
+  private dirFromName(direction: DirectionName): Dir | null {
+    switch (direction) {
+      case 'up':
+        return { dx: 0, dy: -1 };
+      case 'down':
+        return { dx: 0, dy: 1 };
+      case 'left':
+        return { dx: -1, dy: 0 };
+      case 'right':
+        return { dx: 1, dy: 0 };
+      default:
+        return null;
+    }
+  }
+
   private enqueueMove(dir: Dir, moveMs: number) {
     if (this.inputQueue.length >= MAX_QUEUE) {
       return;
     }
     this.inputQueue.push({ dx: dir.dx, dy: dir.dy, moveMs });
+  }
+
+  public setTouchDirection(direction: DirectionName | null) {
+    if (!direction) {
+      this.touchHeldDir = null;
+      this.touchHoldStart = 0;
+      this.touchNextRepeatAt = 0;
+      return;
+    }
+
+    const dir = this.dirFromName(direction);
+    if (!dir) {
+      return;
+    }
+
+    const isSame =
+      this.touchHeldDir &&
+      this.touchHeldDir.dx === dir.dx &&
+      this.touchHeldDir.dy === dir.dy;
+
+    this.touchHeldDir = dir;
+    if (isSame) {
+      return;
+    }
+
+    const now = this.time.now;
+    this.touchHoldStart = now;
+    this.touchNextRepeatAt = now + HOLD_DELAY_MS;
+    this.inputQueue = [];
+    this.enqueueMove(dir, MOVE_MS);
   }
 
   private enqueueUndo() {
