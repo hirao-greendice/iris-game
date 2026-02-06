@@ -57,7 +57,6 @@ body {
 }
 
 canvas {
-  border-radius: 14px;
   box-shadow: 0 24px 50px rgba(0, 0, 0, 0.45);
 }
 

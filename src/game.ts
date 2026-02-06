@@ -140,6 +140,7 @@ export class GameScene extends Phaser.Scene {
   private playerPos: Pos = { x: 0, y: 0 };
   private player!: Phaser.GameObjects.Sprite;
   private infoText!: Phaser.GameObjects.Text;
+  private bgm?: Phaser.Sound.BaseSound;
   private hasWon = false;
   private isAnimating = false;
   private inputQueue: QueuedMove[] = [];
@@ -159,11 +160,17 @@ export class GameScene extends Phaser.Scene {
     super('game');
   }
 
+  preload() {
+    const musicUrl = new URL('./assets/audio/music.mp3', import.meta.url);
+    this.load.audio('bgm', musicUrl.toString());
+  }
+
   create() {
     this.createTextures();
     this.drawBoard();
     this.resetState();
     this.setupCamera();
+    this.setupBgm();
 
     this.infoText = this.add
       .text(8, 8, '', {
@@ -276,6 +283,25 @@ export class GameScene extends Phaser.Scene {
     const cam = this.cameras.main;
     cam.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     cam.startFollow(this.player, true, 0.12, 0.12);
+  }
+
+  private setupBgm() {
+    const start = () => {
+      if (this.bgm?.isPlaying) {
+        return;
+      }
+      if (!this.bgm) {
+        this.bgm = this.sound.add('bgm', { loop: true, volume: 0.6 });
+      }
+      if (!this.sound.locked) {
+        this.bgm.play();
+      }
+    };
+
+    this.input.once('pointerdown', start);
+    this.input.keyboard?.once('keydown', start);
+    this.sound.once(Phaser.Sound.Events.UNLOCKED, start);
+    start();
   }
 
   private createTextures() {
