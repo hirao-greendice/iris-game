@@ -3,6 +3,9 @@
   font-family: 'Trebuchet MS', 'Yu Gothic', 'Meiryo', sans-serif;
   --controls-height: clamp(120px, 22vh, 220px);
   --controls-width: min(92vw, 420px);
+  --editor-height: clamp(140px, 24vh, 260px);
+  --editor-width: min(92vw, 520px);
+  --hud-height: max(var(--controls-height), var(--editor-height));
   --panel-bg: rgba(16, 22, 32, 0.85);
   --panel-border: rgba(255, 255, 255, 0.08);
   --panel-glow: rgba(0, 210, 211, 0.25);
@@ -44,7 +47,7 @@ body {
 }
 
 #game-wrap {
-  width: min(94vw, calc(100vh - var(--controls-height) - 32px));
+  width: min(94vw, calc(100vh - var(--hud-height) - 32px));
   aspect-ratio: 1 / 1;
   display: flex;
   align-items: center;
@@ -60,6 +63,15 @@ canvas {
   box-shadow: 0 24px 50px rgba(0, 0, 0, 0.45);
 }
 
+#hud {
+  width: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 #controls {
   width: var(--controls-width);
   height: var(--controls-height);
@@ -73,6 +85,84 @@ canvas {
     0 12px 28px rgba(0, 0, 0, 0.35),
     inset 0 0 0 1px rgba(255, 255, 255, 0.05);
   touch-action: none;
+}
+
+#editor {
+  width: var(--editor-width);
+  min-height: var(--editor-height);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 22px;
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.35),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+#editor.is-active {
+  box-shadow:
+    0 0 20px rgba(0, 210, 211, 0.35),
+    0 16px 30px rgba(0, 0, 0, 0.4);
+}
+
+.editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.editor-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.editor-btn,
+.editor-toggle {
+  border: none;
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: linear-gradient(150deg, rgba(36, 46, 58, 0.95), rgba(22, 29, 38, 0.9));
+  color: #f5f6fa;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  box-shadow:
+    0 10px 16px rgba(0, 0, 0, 0.25),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  user-select: none;
+}
+
+.color-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-btn::before {
+  content: '';
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--swatch);
+  border: 2px solid #0b0b0b;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.35);
+}
+
+.editor-btn.is-active {
+  background: linear-gradient(150deg, rgba(0, 210, 211, 0.35), rgba(0, 120, 140, 0.6));
+  box-shadow:
+    0 0 14px var(--panel-glow),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.editor-btn:active,
+.editor-toggle:active {
+  transform: translateY(1px);
 }
 
 .control-grid {
